@@ -28,6 +28,7 @@ if (!admin.apps.length) {
 export async function POST(req: NextRequest) {
   try {
     const body: NotifyRequestBody = await req.json();
+    console.log(body);
     const { token, title, body: messageBody } = body;
 
     if (!token) {
