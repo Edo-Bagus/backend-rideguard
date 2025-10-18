@@ -50,6 +50,37 @@ async function getAllHospitals() {
   }
 }
 
+// Fungsi untuk memeriksa apakah crash_id sudah ada di Firestore
+async function checkCrashExists(crashId: string): Promise<boolean> {
+  try {
+    const doc = await admin.firestore().collection('crash_id').doc(crashId).get();
+    return doc.exists;
+  } catch (error) {
+    console.error("Error checking crash existence:", error);
+    throw new Error("Failed to check crash existence.");
+  }
+}
+
+// Fungsi untuk menyimpan data crash ke Firestore
+async function saveCrashData(crashId: string, rideguardId: string, lat: number, long: number) {
+  try {
+    const crashData = {
+      crash_id: crashId,
+      rideguard_id: rideguardId,
+      latitude: lat,
+      longitude: long,
+      timestamp: admin.firestore.FieldValue.serverTimestamp(),
+      created_at: new Date().toISOString()
+    };
+
+    await admin.firestore().collection('crash_id').doc(crashId).set(crashData);
+    console.log(`New crash data saved for crash_id: ${crashId}`);
+  } catch (error) {
+    console.error("Error saving crash data:", error);
+    throw new Error("Failed to save crash data.");
+  }
+}
+
 // Endpoint untuk menerima POST request dan mengembalikan rumah sakit terdekat
 export async function POST(req: NextRequest) {
   try {
@@ -58,11 +89,23 @@ export async function POST(req: NextRequest) {
     console.log(crash_id, rideguard_id, lat, long);
 
     // Validasi input
-    if (!lat || !long || isNaN(lat) || isNaN(long)) {
-      return new NextResponse(JSON.stringify({ error: "Valid 'lat' and 'long' are required" }), {
+    if (!crash_id || !rideguard_id || !lat || !long || isNaN(lat) || isNaN(long)) {
+      return new NextResponse(JSON.stringify({ 
+        error: "Valid 'crash_id', 'rideguard_id', 'lat' and 'long' are required" 
+      }), {
         status: 400,
         headers: { "Content-Type": "application/json" },
       });
+    }
+
+    // Periksa apakah crash_id sudah ada di database
+    const crashExists = await checkCrashExists(crash_id);
+    
+    if (crashExists) {
+      console.log(`⚠️  Crash with ID ${crash_id} has occurred before. Not saving to database, but continuing to process request.`);
+    } else {
+      // Simpan data crash baru ke Firebase
+      await saveCrashData(crash_id, rideguard_id, lat, long);
     }
 
     // Ambil data rumah sakit dari Firestore
@@ -96,8 +139,20 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    // Return hospital terdekat
-    return new NextResponse(JSON.stringify({ success: true, nearestHospital, distance: minDistance }), {
+    // Return hospital terdekat dengan informasi crash
+    return new NextResponse(JSON.stringify({ 
+      success: true, 
+      nearestHospital, 
+      distance: minDistance,
+      crash_info: {
+        crash_id,
+        rideguard_id,
+        is_new_crash: !crashExists,
+        message: crashExists 
+          ? "Crash ID already exists in database - duplicate crash detected" 
+          : "New crash data saved to database"
+      }
+    }), {
       status: 200,
       headers: { "Content-Type": "application/json" },
     });
