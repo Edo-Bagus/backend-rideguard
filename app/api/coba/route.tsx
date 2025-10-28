@@ -34,8 +34,17 @@ function haversine(lat1: number, lon1: number, lat2: number, lon2: number): numb
   return R * c; // Mengembalikan jarak dalam kilometer
 }
 
+interface Hospital {
+  id: string;
+  name: string;
+  location: {
+    _latitude: number;
+    _longitude: number;
+  };
+}
+
 // Fungsi untuk mengambil semua rumah sakit dari Firestore
-async function getAllHospitals() {
+async function getAllHospitals(): Promise<Hospital[]> {
   try {
     const snapshot = await admin.firestore().collection('emergency_services').get();
     const hospitals = snapshot.docs.map(doc => ({
@@ -75,8 +84,8 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    // Cari rumah sakit terdekat
-    let nearestHospital = null;
+    // Cari rumah sakit terdeka
+    let nearestHospital: Hospital | null = null;
     let minDistance = Infinity;
 
     hospitals.forEach(hospital => {
@@ -89,12 +98,21 @@ export async function POST(req: NextRequest) {
       }
     });
 
-    if (!nearestHospital) {
+    if (!nearestHospital || !('name' in nearestHospital)) {
       return new NextResponse(JSON.stringify({ error: "No nearest hospital found" }), {
         status: 404,
         headers: { "Content-Type": "application/json" },
       });
     }
+
+    
+    const message = {
+      notification: {
+        title: "TABRAKAN",
+        body: "RideGuard mendeteksi tabrakan, rumah sakit terdekat: " + nearestHospital,
+      },
+      token: "feepOfx_QGWljPgNZI3I7I:APA91bH8RTVzV5zVysrwwIUQ1wKeu6rQkf9QgKuz6ya8-SNG967UWmjq_5JJFCBYZWtdZ3NlO31ihnu__bV03Nv5a7wASsC8HBfw19mBAs90m57UsRoYqgA"
+    };
 
     // Return hospital terdekat
     return new NextResponse(JSON.stringify({ success: true, nearestHospital, distance: minDistance }), {
