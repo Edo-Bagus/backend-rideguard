@@ -157,8 +157,10 @@ export async function POST(req: NextRequest) {
       token: "feepOfx_QGWljPgNZI3I7I:APA91bH8RTVzV5zVysrwwIUQ1wKeu6rQkf9QgKuz6ya8-SNG967UWmjq_5JJFCBYZWtdZ3NlO31ihnu__bV03Nv5a7wASsC8HBfw19mBAs90m57UsRoYqgA"
     };
 
+    const response = await admin.messaging().send(message);
+
     // Return hospital terdekat
-    return new NextResponse(JSON.stringify({ success: true, nearestHospital, distance: minDistance }), {
+    return new NextResponse(JSON.stringify({ success: true, nearestHospital, distance: minDistance, response }), {
       status: 200,
       headers: { "Content-Type": "application/json" },
     });
