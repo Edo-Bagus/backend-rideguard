@@ -36,7 +36,7 @@ export async function POST(req: NextRequest) {
     }
 
     const message = {
-      notification: {
+      data: {
         title: title || "Default Title",
         body: messageBody || "Default Body",
       },
