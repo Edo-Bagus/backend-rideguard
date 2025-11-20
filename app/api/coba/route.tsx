@@ -69,45 +69,7 @@ async function getAllHospitals(): Promise<Hospital[]> {
   }
 }
 
-// Fungsi untuk memeriksa apakah crash_id sudah ada di Firestore
-async function checkCrashExists(crashId: string): Promise<boolean> {
-  try {
-    const doc = await admin
-      .firestore()
-      .collection("crash_id")
-      .doc(crashId)
-      .get();
-    return doc.exists;
-  } catch (error) {
-    console.error("Error checking crash existence:", error);
-    throw new Error("Failed to check crash existence.");
-  }
-}
 
-// Fungsi untuk menyimpan data crash ke Firestore
-async function saveCrashData(
-  crashId: string,
-  rideguardId: string,
-  lat: number,
-  long: number
-) {
-  try {
-    const crashData = {
-      crash_id: crashId,
-      rideguard_id: rideguardId,
-      latitude: lat,
-      longitude: long,
-      timestamp: admin.firestore.FieldValue.serverTimestamp(),
-      created_at: new Date().toISOString(),
-    };
-
-    await admin.firestore().collection("crash_id").doc(crashId).set(crashData);
-    console.log(`New crash data saved for crash_id: ${crashId}`);
-  } catch (error) {
-    console.error("Error saving crash data:", error);
-    throw new Error("Failed to save crash data.");
-  }
-}
 
 // Fungsi untuk mendapatkan semua token terkait dengan rideguard_id
 async function getTokensForRideguard(rideguardId: string): Promise<string[]> {
@@ -166,10 +128,11 @@ async function getTokensForRideguard(rideguardId: string): Promise<string[]> {
       if (typeof contact !== "object" || contact === null) continue;
 
       // Get the emergency contact username - try multiple field names
+      const contactRecord = contact as Record<string, unknown>;
       const contactUsername =
-        (contact as any)?.username ||
-        (contact as any)?.contactUsername ||
-        (contact as any)?.name;
+        contactRecord.username ||
+        contactRecord.contactUsername ||
+        contactRecord.name;
 
       if (!contactUsername || typeof contactUsername !== "string") {
         console.warn(`Emergency contact missing username:`, contact);
