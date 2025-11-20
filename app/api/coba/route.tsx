@@ -113,7 +113,9 @@ async function saveCrashData(
 async function getTokensForRideguard(rideguardId: string): Promise<string[]> {
   try {
     const db = admin.firestore();
-    // Step 1: Read the rideguard device document to get currentUser and emergencyContacts
+    const tokensSet = new Set<string>();
+
+    // Step 1: Read the rideguard device document to get the username
     const deviceDoc = await db.collection("rideguard_id").doc(rideguardId).get();
 
     if (!deviceDoc.exists) {
@@ -122,62 +124,89 @@ async function getTokensForRideguard(rideguardId: string): Promise<string[]> {
     }
 
     const deviceData = deviceDoc.data();
-    const currentUser = deviceData?.currentUser;
+    const rideguardUsername = deviceData?.username || deviceData?.currentUser?.username;
 
-    if (!currentUser || !Array.isArray(currentUser.emergencyContacts)) {
-      console.log(`No currentUser.emergencyContacts found for device: ${rideguardId}`);
+    if (!rideguardUsername || typeof rideguardUsername !== "string") {
+      console.log(`No username found for rideguard device: ${rideguardId}`);
       return [];
     }
 
-    type EmergencyContact = {
-      contactUid?: string;
-      contactId?: string;
-      uid?: string;
-      [key: string]: unknown;
-    };
+    console.log(`Found rideguard username: ${rideguardUsername}`);
 
-    const contactEntries: unknown[] = currentUser.emergencyContacts;
-    const tokensSet = new Set<string>();
+    // Step 2: Search in users collection for the rideguard username
+    const rideguardUserQuery = await db
+      .collection("users")
+      .where("username", "==", rideguardUsername)
+      .limit(1)
+      .get();
 
-    // For each emergency contact, try to collect tokens from two places:
-    // 1) users collection field `fcmToken` (or `fcmToken` in doc)
-    // 2) fcm_tokens collection documents where userId == contactUid
-    for (const contact of contactEntries) {
+    if (rideguardUserQuery.empty) {
+      console.log(`User not found for username: ${rideguardUsername}`);
+      return [];
+    }
+
+    const rideguardUserDoc = rideguardUserQuery.docs[0];
+    const rideguardUserData = rideguardUserDoc.data();
+    console.log(`Found rideguard user document for: ${rideguardUsername}`);
+
+    // Step 3: Read the emergency contacts from the rideguard user document
+    const emergencyContacts = Array.isArray(rideguardUserData?.emergencyContacts)
+      ? rideguardUserData.emergencyContacts
+      : [];
+
+    if (emergencyContacts.length === 0) {
+      console.log(`No emergency contacts found for user: ${rideguardUsername}`);
+      return [];
+    }
+
+    console.log(`Found ${emergencyContacts.length} emergency contact(s) for user: ${rideguardUsername}`);
+
+    // Step 4 & 5: For each emergency contact, search users collection by username and get the token
+    for (const contact of emergencyContacts) {
       if (typeof contact !== "object" || contact === null) continue;
-      const c = contact as EmergencyContact;
-      const contactUid = c.contactUid ?? c.contactId ?? c.uid ?? null;
-      if (!contactUid || typeof contactUid !== "string") continue;
 
-      // Try 1: read users/{contactUid} doc for an fcmToken field
-      try {
-        const userDoc = await db.collection("users").doc(contactUid).get();
-        if (userDoc.exists) {
-          const userData = userDoc.data();
-          const maybeToken = userData?.fcmToken || userData?.fcm_tokens || userData?.token || null;
-          if (typeof maybeToken === "string" && maybeToken.length) tokensSet.add(maybeToken);
-        }
-      } catch (err) {
-        console.warn(`Failed to read user doc for ${contactUid}:`, err);
+      // Get the emergency contact username - try multiple field names
+      const contactUsername =
+        (contact as any)?.username ||
+        (contact as any)?.contactUsername ||
+        (contact as any)?.name;
+
+      if (!contactUsername || typeof contactUsername !== "string") {
+        console.warn(`Emergency contact missing username:`, contact);
+        continue;
       }
 
-      // Try 2: query fcm_tokens collection for entries matching this userId
+      console.log(`Processing emergency contact username: ${contactUsername}`);
+
+      // Search for the emergency contact user by username
       try {
-        const tokensSnapshot = await db
-          .collection("fcm_tokens")
-          .where("userId", "==", contactUid)
+        const contactUserQuery = await db
+          .collection("users")
+          .where("username", "==", contactUsername)
+          .limit(1)
           .get();
 
-        tokensSnapshot.forEach((tokenDoc) => {
-          const tokenData = tokenDoc.data();
-          if (tokenData?.token) tokensSet.add(tokenData.token);
-        });
+        if (contactUserQuery.empty) {
+          console.warn(`Emergency contact user not found for username: ${contactUsername}`);
+          continue;
+        }
+
+        const contactUserData = contactUserQuery.docs[0].data();
+        const token = contactUserData?.fcmToken || contactUserData?.token;
+
+        if (token && typeof token === "string" && token.length > 0) {
+          tokensSet.add(token);
+          console.log(`Added token for emergency contact: ${contactUsername}`);
+        } else {
+          console.warn(`No token found for emergency contact: ${contactUsername}`);
+        }
       } catch (err) {
-        console.warn(`Failed to query fcm_tokens for ${contactUid}:`, err);
+        console.warn(`Failed to lookup emergency contact ${contactUsername}:`, err);
       }
     }
 
     const tokens = Array.from(tokensSet);
-    console.log(`Retrieved ${tokens.length} tokens for rideguard device ${rideguardId}`);
+    console.log(`Retrieved ${tokens.length} tokens for rideguard_id: ${rideguardId}`);
     return tokens;
   } catch (error) {
     console.error("Error getting tokens for rideguard:", error);
@@ -264,8 +293,9 @@ export async function POST(req: NextRequest) {
     );
 
     if (tokens.length > 0) {
+      console.log(tokens);
       const messages = tokens.map(token => ({
-        notification: {
+        data: {
           title: "TABRAKAN",
           body: `RideGuard mendeteksi tabrakan, rumah sakit terdekat: ${nearestHospital!.name}`,
         },
