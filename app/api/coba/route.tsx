@@ -113,44 +113,71 @@ async function saveCrashData(
 async function getTokensForRideguard(rideguardId: string): Promise<string[]> {
   try {
     const db = admin.firestore();
+    // Step 1: Read the rideguard device document to get currentUser and emergencyContacts
+    const deviceDoc = await db.collection("rideguard_id").doc(rideguardId).get();
 
-    // Step 1: Find all users associated with the given rideguard ID
-    const usersSnapshot = await db
-      .collection("users")
-      .where("rideguard_id", "==", rideguardId)
-      .get();
-
-    if (usersSnapshot.empty) {
-      console.log(`No users found for rideguard_id: ${rideguardId}`);
+    if (!deviceDoc.exists) {
+      console.log(`Rideguard device not found: ${rideguardId}`);
       return [];
     }
 
-    console.log(
-      `Found ${usersSnapshot.size} users for rideguard_id: ${rideguardId}`
-    );
+    const deviceData = deviceDoc.data();
+    const currentUser = deviceData?.currentUser;
 
-    const tokens: string[] = [];
-
-    // Step 2: For each user, get their tokens
-    for (const userDoc of usersSnapshot.docs) {
-      const userId = userDoc.id;
-
-      const tokensSnapshot = await db
-        .collection("fcm_tokens")
-        .where("userId", "==", userId)
-        .get();
-
-      tokensSnapshot.forEach((tokenDoc) => {
-        const tokenData = tokenDoc.data();
-        if (tokenData.token) {
-          tokens.push(tokenData.token);
-        }
-      });
+    if (!currentUser || !Array.isArray(currentUser.emergencyContacts)) {
+      console.log(`No currentUser.emergencyContacts found for device: ${rideguardId}`);
+      return [];
     }
 
-    console.log(
-      `Retrieved ${tokens.length} total tokens for rideguard_id: ${rideguardId}`
-    );
+    type EmergencyContact = {
+      contactUid?: string;
+      contactId?: string;
+      uid?: string;
+      [key: string]: unknown;
+    };
+
+    const contactEntries: unknown[] = currentUser.emergencyContacts;
+    const tokensSet = new Set<string>();
+
+    // For each emergency contact, try to collect tokens from two places:
+    // 1) users collection field `fcmToken` (or `fcmToken` in doc)
+    // 2) fcm_tokens collection documents where userId == contactUid
+    for (const contact of contactEntries) {
+      if (typeof contact !== "object" || contact === null) continue;
+      const c = contact as EmergencyContact;
+      const contactUid = c.contactUid ?? c.contactId ?? c.uid ?? null;
+      if (!contactUid || typeof contactUid !== "string") continue;
+
+      // Try 1: read users/{contactUid} doc for an fcmToken field
+      try {
+        const userDoc = await db.collection("users").doc(contactUid).get();
+        if (userDoc.exists) {
+          const userData = userDoc.data();
+          const maybeToken = userData?.fcmToken || userData?.fcm_tokens || userData?.token || null;
+          if (typeof maybeToken === "string" && maybeToken.length) tokensSet.add(maybeToken);
+        }
+      } catch (err) {
+        console.warn(`Failed to read user doc for ${contactUid}:`, err);
+      }
+
+      // Try 2: query fcm_tokens collection for entries matching this userId
+      try {
+        const tokensSnapshot = await db
+          .collection("fcm_tokens")
+          .where("userId", "==", contactUid)
+          .get();
+
+        tokensSnapshot.forEach((tokenDoc) => {
+          const tokenData = tokenDoc.data();
+          if (tokenData?.token) tokensSet.add(tokenData.token);
+        });
+      } catch (err) {
+        console.warn(`Failed to query fcm_tokens for ${contactUid}:`, err);
+      }
+    }
+
+    const tokens = Array.from(tokensSet);
+    console.log(`Retrieved ${tokens.length} tokens for rideguard device ${rideguardId}`);
     return tokens;
   } catch (error) {
     console.error("Error getting tokens for rideguard:", error);
@@ -236,7 +263,6 @@ export async function POST(req: NextRequest) {
       `Found ${tokens.length} tokens for rideguard_id: ${rideguard_id}`
     );
 
-    let response = null;
     if (tokens.length > 0) {
       const messages = tokens.map(token => ({
         notification: {
@@ -246,8 +272,8 @@ export async function POST(req: NextRequest) {
         token,
       }));
 
-      response = await admin.messaging().sendEach(messages);
-      console.log(`Notification sent to ${tokens.length} devices for rideguard_id: ${rideguard_id}`);
+  await admin.messaging().sendEach(messages);
+  console.log(`Notification sent to ${tokens.length} devices for rideguard_id: ${rideguard_id}`);
     } else {
       console.log(`No tokens found for rideguard_id: ${rideguard_id}`);
     }
